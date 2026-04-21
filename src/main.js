@@ -9,6 +9,7 @@ const API_ENDPOINTS = {
     PAGE_TYPES: `${API_BASE_URL}/sls/b2c/product-discovery-seo-data-bs/v2/page-types`,
     PRODUCT_SHELVES: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v1/product-shelves`,
     PRODUCTS_SEARCH: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v1/products/search`,
+    SEARCH_PRODUCT: `${API_BASE_URL}/sls/pd/product-navigation-search/v1/search-product`,
     REVIEW_STATISTICS: `${API_BASE_URL}/sls/product/product-reviews-integration-bs/v1/review-statistics`,
 };
 
@@ -52,20 +53,44 @@ async function run() {
     log.info(`Mode: ${mode}. Country: ${market.country}. Target: ${normalizedUrl.href}`);
 
     const seen = new Set();
-    const saved = mode === 'keyword'
-        ? await scrapeByKeyword({
+    let saved;
+
+    if (mode === 'keyword') {
+        const redirectedUrl = await resolveKeywordRedirectUrl({
             keyword: urlContext.keyword,
+            normalizedUrl,
             market,
             queryOptions,
-            resultsWanted,
-            maxPages,
             proxyConfiguration,
-            seen,
-            sourceUrl: normalizedUrl.href,
-            sourceMode: 'url',
-            sourceInput: normalizedUrl.href,
-        })
-        : await scrapeByUrl({
+        });
+
+        if (redirectedUrl) {
+            log.info(`Keyword URL resolved to canonical shelf URL: ${redirectedUrl.href}`);
+            saved = await scrapeByUrl({
+                normalizedUrl: redirectedUrl,
+                market,
+                queryOptions,
+                resultsWanted,
+                maxPages,
+                proxyConfiguration,
+                seen,
+            });
+        } else {
+            saved = await scrapeByKeyword({
+                keyword: urlContext.keyword,
+                market,
+                queryOptions,
+                resultsWanted,
+                maxPages,
+                proxyConfiguration,
+                seen,
+                sourceUrl: normalizedUrl.href,
+                sourceMode: 'url',
+                sourceInput: normalizedUrl.href,
+            });
+        }
+    } else {
+        saved = await scrapeByUrl({
             normalizedUrl,
             market,
             queryOptions,
@@ -74,6 +99,7 @@ async function run() {
             proxyConfiguration,
             seen,
         });
+    }
 
     log.info(`Finished. Saved ${saved} items.`);
 }
@@ -87,18 +113,44 @@ async function scrapeByUrl({
     proxyConfiguration,
     seen,
 }) {
-    const canonicalPath = normalizeCanonicalPath(normalizedUrl.pathname);
+    const originalCanonicalPath = normalizeCanonicalPath(normalizedUrl.pathname);
     const resolved = await resolvePageType({
-        canonicalPath,
+        canonicalPath: originalCanonicalPath,
         country: market.country,
         proxyConfiguration,
     });
+    const fallbackCanonicalPath = resolved.canonicalPath && resolved.canonicalPath !== '/'
+        ? resolved.canonicalPath
+        : originalCanonicalPath;
 
     const pageType = cleanString(firstDefined(resolved.result?.pageType, resolved.result?.subPageType));
     if (pageType !== 'ProductShelf') {
-        throw new Error(
-            `URL does not resolve to a product shelf page. Resolved pageType: ${pageType || 'unknown'} (path: ${resolved.canonicalPath})`
+        const fallbackKeywords = buildFallbackKeywords({
+            normalizedUrl,
+            pageTypeResult: resolved.result,
+            canonicalPath: fallbackCanonicalPath,
+        });
+        if (!fallbackKeywords.length) {
+            throw new Error(
+                `URL does not resolve to a product shelf page and no fallback keyword could be derived. Resolved pageType: ${pageType || 'unknown'} (path: ${resolved.canonicalPath})`
+            );
+        }
+
+        log.warning(
+            `URL resolved to ${pageType || 'unknown'} instead of ProductShelf. Falling back to keyword search with ${fallbackKeywords.length} candidate query(s).`
         );
+        return scrapeByKeywordCandidates({
+            keywords: fallbackKeywords,
+            market,
+            queryOptions,
+            resultsWanted,
+            maxPages,
+            proxyConfiguration,
+            seen,
+            sourceUrl: normalizedUrl.href,
+            sourceMode: 'url',
+            sourceInput: normalizedUrl.href,
+        });
     }
 
     const partGroupId = cleanString(resolved.result?.catalogId);
@@ -146,16 +198,14 @@ async function scrapeByUrl({
         );
         if (!records.length) {
             if (pageNumber === 1) {
-                const fallbackKeyword = buildKeywordFromPageType({
-                    catalogName: resolved.result?.catalogName,
-                    make: resolved.result?.make,
-                    model: resolved.result?.model,
-                    year: resolved.result?.year,
-                    canonicalPath: resolved.result?.canonicalPath || resolved.canonicalPath,
+                const fallbackKeywords = buildFallbackKeywords({
+                    normalizedUrl,
+                    pageTypeResult: resolved.result,
+                    canonicalPath: resolved.result?.canonicalPath || fallbackCanonicalPath,
                 });
-                log.warning(`URL mode returned no records. Falling back to keyword mode with: "${fallbackKeyword}"`);
-                return scrapeByKeyword({
-                    keyword: fallbackKeyword,
+                log.warning(`URL mode returned no records. Falling back to keyword mode with ${fallbackKeywords.length} candidate query(s).`);
+                return scrapeByKeywordCandidates({
+                    keywords: fallbackKeywords,
                     market,
                     queryOptions,
                     resultsWanted,
@@ -190,6 +240,41 @@ async function scrapeByUrl({
     }
 
     return totalSaved;
+}
+
+async function scrapeByKeywordCandidates({
+    keywords,
+    market,
+    queryOptions,
+    resultsWanted,
+    maxPages,
+    proxyConfiguration,
+    seen,
+    sourceUrl,
+    sourceMode,
+    sourceInput,
+}) {
+    const candidates = unique(keywords.map(cleanSearchPhrase).filter(Boolean));
+    if (!candidates.length) return 0;
+
+    for (const keyword of candidates) {
+        log.info(`Trying keyword fallback: "${keyword}"`);
+        const saved = await scrapeByKeyword({
+            keyword,
+            market,
+            queryOptions,
+            resultsWanted,
+            maxPages,
+            proxyConfiguration,
+            seen,
+            sourceUrl,
+            sourceMode,
+            sourceInput,
+        });
+        if (saved > 0) return saved;
+    }
+
+    return 0;
 }
 
 async function scrapeByKeyword({
@@ -275,6 +360,7 @@ async function savePageRecords({
 }) {
     const skuIds = unique(records.map(extractSkuId).filter(Boolean));
     const reviewMap = await fetchReviewStatisticsMap({ skuIds, proxyConfiguration });
+    const baseUrl = getMarketBaseUrl(market);
 
     const batch = [];
     for (let i = 0; i < records.length; i++) {
@@ -288,7 +374,7 @@ async function savePageRecords({
         const skuId = extractSkuId(record);
         const reviewStats = skuId ? reviewMap.get(String(skuId)) : undefined;
 
-        const compacted = compactObject({
+        const compacted = compactObject(normalizeDatasetUrls({
             sourceMode,
             sourceInput,
             sourceUrl,
@@ -300,7 +386,7 @@ async function savePageRecords({
             rankOverall: startRank + batch.length,
             ...record,
             reviewStatistics: reviewStats,
-        });
+        }, baseUrl));
 
         if (compacted && Object.keys(compacted).length) {
             batch.push(compacted);
@@ -331,6 +417,37 @@ async function fetchReviewStatisticsMap({ skuIds, proxyConfiguration }) {
         map.set(sku, compactObject(row));
     }
     return map;
+}
+
+async function resolveKeywordRedirectUrl({
+    keyword,
+    normalizedUrl,
+    market,
+    queryOptions,
+    proxyConfiguration,
+}) {
+    const cleanedKeyword = cleanSearchPhrase(keyword);
+    if (!cleanedKeyword) return null;
+
+    const response = await requestJson({
+        url: API_ENDPOINTS.SEARCH_PRODUCT,
+        proxyConfiguration,
+        searchParams: compactObject({
+            country: market.country,
+            customerType: 'B2C',
+            salesChannel: 'ECOMM',
+            preview: false,
+            ignoreVehicleSpecificProductsCheck: false,
+            searchedKeyword: cleanedKeyword,
+            storeId: queryOptions.storeId,
+        }),
+    });
+
+    const redirectUrl = cleanString(response?.redirectUrl);
+    if (!redirectUrl || redirectUrl === '/') return null;
+
+    const redirected = new URL(redirectUrl, normalizedUrl.origin);
+    return normalizeAutoZoneUrl(redirected.href);
 }
 
 async function resolvePageType({ canonicalPath, country, proxyConfiguration }) {
@@ -437,21 +554,19 @@ function resolveMarket(url) {
 }
 
 function getUrlContext(url) {
-    const searchKeyword = cleanString(
-        firstNonEmpty(
-            url.searchParams.get('searchText'),
-            url.searchParams.get('q'),
-            url.searchParams.get('query'),
-            url.searchParams.get('keyword'),
-            url.searchParams.get('searchTerm')
-        )
-    );
-    if (searchKeyword) return { mode: 'keyword', keyword: searchKeyword };
-
     const path = normalizeCanonicalPath(url.pathname).toLowerCase();
     if (path.startsWith('/searchresult')) {
-        const fallbackKeyword = buildKeywordFromPath(path);
-        return { mode: 'keyword', keyword: fallbackKeyword };
+        const searchKeyword = cleanString(
+            firstNonEmpty(
+                url.searchParams.get('searchText'),
+                url.searchParams.get('q'),
+                url.searchParams.get('query'),
+                url.searchParams.get('keyword'),
+                url.searchParams.get('searchTerm')
+            )
+        );
+        const fallbackKeyword = buildKeywordFromPath(path) || 'autozone parts';
+        return { mode: 'keyword', keyword: searchKeyword || fallbackKeyword };
     }
 
     return { mode: 'url', keyword: '' };
@@ -468,7 +583,7 @@ function buildKeywordFromPageType({ catalogName, make, model, year, canonicalPat
         .map((part) => part.replace(/-/g, ' '))
         .join(' ');
 
-    return cleanString(fromPath) || 'autozone parts';
+    return cleanString(fromPath);
 }
 
 function buildKeywordFromPath(pathname) {
@@ -479,7 +594,106 @@ function buildKeywordFromPath(pathname) {
         .filter(Boolean)
         .filter((part) => !['searchresult', 's', 'c', 'tag', 'tags'].includes(part.toLowerCase()));
 
-    return cleanString(tokens.join(' ')) || 'autozone parts';
+    return cleanString(tokens.join(' '));
+}
+
+function buildFallbackKeywords({ normalizedUrl, pageTypeResult, canonicalPath }) {
+    const keywords = [];
+    const normalizedPath = canonicalPath || normalizedUrl.pathname;
+    const searchParamKeyword = firstNonEmpty(
+        normalizedUrl.searchParams.get('searchText'),
+        normalizedUrl.searchParams.get('q'),
+        normalizedUrl.searchParams.get('query'),
+        normalizedUrl.searchParams.get('keyword'),
+        normalizedUrl.searchParams.get('searchTerm')
+    );
+
+    const fromPageType = buildKeywordFromPageType({
+        catalogName: pageTypeResult?.catalogName,
+        make: pageTypeResult?.make,
+        model: pageTypeResult?.model,
+        year: pageTypeResult?.year,
+        canonicalPath: normalizedPath,
+    });
+    if (fromPageType) keywords.push(fromPageType);
+
+    const pdpKeyword = buildPdpKeyword(normalizedUrl.pathname);
+    if (pdpKeyword) keywords.push(pdpKeyword);
+
+    if (searchParamKeyword && normalizeCanonicalPath(normalizedUrl.pathname).toLowerCase().startsWith('/searchresult')) {
+        keywords.unshift(searchParamKeyword);
+    } else if (searchParamKeyword) {
+        keywords.push(searchParamKeyword);
+    }
+
+    const fromPath = buildKeywordFromPath(normalizedPath);
+    if (fromPath) keywords.push(fromPath);
+
+    return unique(keywords.map(cleanSearchPhrase).filter(Boolean));
+}
+
+function buildPdpKeyword(pathname) {
+    const parts = normalizeCanonicalPath(pathname).split('/').filter(Boolean);
+    if (parts[0]?.toLowerCase() !== 'p' || parts.length < 2) return '';
+
+    const slug = cleanString(parts[1]).replace(/-/g, ' ');
+    return cleanSearchPhrase(slug.replace(/\b\d{5,}\b/g, ' '));
+}
+
+function cleanSearchPhrase(value) {
+    return cleanString(value)
+        .replace(/[_/]+/g, ' ')
+        .replace(/\b(true|false|null|undefined)\b/gi, ' ')
+        .replace(/[^\w\s-]+/g, ' ')
+        .replace(/-/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizeDatasetUrls(value, baseUrl, key = '') {
+    if (value === null || value === undefined) return value;
+
+    if (typeof value === 'string') {
+        if (shouldConvertToAbsoluteUrl(key, value)) {
+            return toAbsoluteAutoZoneUrl(value, baseUrl);
+        }
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => normalizeDatasetUrls(item, baseUrl, key));
+    }
+
+    if (typeof value === 'object') {
+        const output = {};
+        for (const [childKey, childValue] of Object.entries(value)) {
+            output[childKey] = normalizeDatasetUrls(childValue, baseUrl, childKey);
+        }
+        return output;
+    }
+
+    return value;
+}
+
+function shouldConvertToAbsoluteUrl(key, value) {
+    if (!value.startsWith('/')) return false;
+
+    return key === 'canonicalPath'
+        || key === 'taxonomyPath'
+        || key.endsWith('Url')
+        || key.endsWith('Path');
+}
+
+function toAbsoluteAutoZoneUrl(pathOrUrl, baseUrl) {
+    if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+    if (!pathOrUrl.startsWith('/')) return pathOrUrl;
+    return new URL(pathOrUrl, baseUrl).href;
+}
+
+function getMarketBaseUrl(market) {
+    if (market?.country === 'MEX') return 'https://www.autozone.com.mx';
+    if (market?.country === 'BRA') return 'https://www.autozone.com.br';
+    return AUTOZONE_BASE_URL;
 }
 
 function normalizeAutoZoneUrl(raw) {
