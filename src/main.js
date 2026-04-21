@@ -47,7 +47,7 @@ async function run() {
         ? await Actor.createProxyConfiguration({ ...input.proxyConfiguration })
         : undefined;
     const urlContext = getUrlContext(normalizedUrl);
-    const mode = urlContext.mode;
+    const { mode } = urlContext;
 
     log.info(`Mode: ${mode}. Country: ${market.country}. Target: ${normalizedUrl.href}`);
 
@@ -375,29 +375,38 @@ async function resolvePageType({ canonicalPath, country, proxyConfiguration }) {
 }
 
 async function requestJson({ method = 'GET', url, searchParams, jsonBody, proxyConfiguration }) {
-    const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
+    let lastError;
 
-    const response = await gotScraping({
-        method,
-        url,
-        searchParams,
-        json: jsonBody,
-        proxyUrl,
-        timeout: { request: 60000 },
-        headers: COMMON_HEADERS,
-        throwHttpErrors: false,
-    });
+    for (let attempt = 1; attempt <= MAX_REQUEST_RETRIES; attempt++) {
+        try {
+            const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
+            const response = await gotScraping({
+                method,
+                url,
+                searchParams,
+                json: jsonBody,
+                proxyUrl,
+                timeout: { request: 60000 },
+                headers: COMMON_HEADERS,
+                throwHttpErrors: false,
+            });
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-        const preview = cleanString(response.body)?.slice(0, 220) || '';
-        throw new Error(`Request failed ${response.statusCode} for ${url}. ${preview}`);
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                const preview = cleanString(response.body)?.slice(0, 220) || '';
+                throw new Error(`Request failed ${response.statusCode} for ${url}. ${preview}`);
+            }
+
+            return JSON.parse(response.body);
+        } catch (error) {
+            lastError = error;
+            if (attempt < MAX_REQUEST_RETRIES) {
+                log.warning(`Retrying request (${attempt}/${MAX_REQUEST_RETRIES}) for ${url}: ${error.message}`);
+                await Actor.sleep(500 * attempt);
+            }
+        }
     }
 
-    try {
-        return JSON.parse(response.body);
-    } catch {
-        throw new Error(`Expected JSON response from ${url} but received non-JSON body.`);
-    }
+    throw lastError;
 }
 
 function extractQueryOptions(searchParams) {
@@ -410,21 +419,42 @@ function extractQueryOptions(searchParams) {
             minPrice: toNullableNumber(searchParams.get('minPrice')),
             maxPrice: toNullableNumber(searchParams.get('maxPrice')),
             partNumberSearch: toNullableBoolean(searchParams.get('partNumberSearch')),
+            storeId: firstNonEmpty(
+                searchParams.get('storeId'),
+                searchParams.get('store'),
+                searchParams.get('storeNumber'),
+                searchParams.get('selectedStore')
+            ),
         }) || {}
     );
 }
 
-function resolveMarket(location) {
-    const normalized = cleanString(location).toLowerCase();
-    if (/\b(mx|mex|mexico)\b/.test(normalized)) return { country: 'MEX', locale: 'es-MX' };
-    if (/\b(br|bra|brazil|brasil)\b/.test(normalized)) return { country: 'BRA', locale: 'pt-BR' };
+function resolveMarket(url) {
+    const hostname = cleanString(url?.hostname).toLowerCase();
+    if (hostname.endsWith('.com.mx')) return { country: 'MEX', locale: 'es-MX' };
+    if (hostname.endsWith('.com.br')) return { country: 'BRA', locale: 'pt-BR' };
     return { country: 'USA', locale: 'en-US' };
 }
 
-function parseStoreIdFromLocation(location) {
-    const digits = cleanString(location).replace(/\D+/g, '');
-    if (!digits) return undefined;
-    return digits.length <= 5 ? digits : undefined;
+function getUrlContext(url) {
+    const searchKeyword = cleanString(
+        firstNonEmpty(
+            url.searchParams.get('searchText'),
+            url.searchParams.get('q'),
+            url.searchParams.get('query'),
+            url.searchParams.get('keyword'),
+            url.searchParams.get('searchTerm')
+        )
+    );
+    if (searchKeyword) return { mode: 'keyword', keyword: searchKeyword };
+
+    const path = normalizeCanonicalPath(url.pathname).toLowerCase();
+    if (path.startsWith('/searchresult')) {
+        const fallbackKeyword = buildKeywordFromPath(path);
+        return { mode: 'keyword', keyword: fallbackKeyword };
+    }
+
+    return { mode: 'url', keyword: '' };
 }
 
 function buildKeywordFromPageType({ catalogName, make, model, year, canonicalPath }) {
@@ -441,8 +471,21 @@ function buildKeywordFromPageType({ catalogName, make, model, year, canonicalPat
     return cleanString(fromPath) || 'autozone parts';
 }
 
+function buildKeywordFromPath(pathname) {
+    const tokens = normalizeCanonicalPath(pathname)
+        .split('/')
+        .filter(Boolean)
+        .flatMap((part) => part.split('-'))
+        .filter(Boolean)
+        .filter((part) => !['searchresult', 's', 'c', 'tag', 'tags'].includes(part.toLowerCase()));
+
+    return cleanString(tokens.join(' ')) || 'autozone parts';
+}
+
 function normalizeAutoZoneUrl(raw) {
-    const value = cleanString(raw);
+    const value = cleanString(raw)
+        .replace(/^"+|"+$/g, '')
+        .replace(/^'+|'+$/g, '');
     let normalized = value;
 
     if (!/^https?:\/\//i.test(normalized)) {
@@ -456,14 +499,20 @@ function normalizeAutoZoneUrl(raw) {
         throw new Error(`Unsupported domain "${url.hostname}". Use an AutoZone URL.`);
     }
 
+    url.protocol = 'https:';
+    url.hostname = url.hostname.toLowerCase();
+    url.pathname = decodeURIComponent(url.pathname);
+    url.pathname = url.pathname.replace(/\/{2,}/g, '/');
+    if (url.pathname !== '/') {
+        url.pathname = url.pathname.replace(/\/+$/, '');
+    }
+    for (const key of [...url.searchParams.keys()]) {
+        if (/^(utm_|gclid$|fbclid$|msockid$|cid$|cmpid$|campid$|intcmp$|source$)/i.test(key)) {
+            url.searchParams.delete(key);
+        }
+    }
     url.hash = '';
     return url;
-}
-
-function getSearchKeywordFromUrl(url) {
-    const path = normalizeCanonicalPath(url.pathname).toLowerCase();
-    if (!path.startsWith('/searchresult')) return '';
-    return cleanString(firstNonEmpty(url.searchParams.get('searchText'), url.searchParams.get('q')));
 }
 
 function normalizeCanonicalPath(pathname) {
@@ -535,9 +584,10 @@ function firstNonEmpty(...values) {
     return '';
 }
 
-function toPositiveInt(value, fallback) {
+function toPositiveIntOrInfinity(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return Number.POSITIVE_INFINITY;
     const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    if (!Number.isFinite(parsed) || parsed < 1) return Number.POSITIVE_INFINITY;
     return Math.floor(parsed);
 }
 
