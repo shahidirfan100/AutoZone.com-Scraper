@@ -1,0 +1,44 @@
+{
+    "title": "AutoZone Products Scraper",
+    "description": "Extract AutoZone product data from AutoZone URLs.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "url": {
+            "title": "URL",
+            "type": "string",
+            "description": "AutoZone page URL. If provided, URL mode is used.",
+            "editor": "textfield",
+            "prefill": "https://www.autozone.com/brakes-and-traction-control/brake-pads/ford"
+        },
+        "results_wanted": {
+            "title": "Results wanted",
+            "type": "integer",
+            "description": "Maximum number of records to collect.",
+            "editor": "number",
+            "minimum": 1,
+            "default": 20,
+            "prefill": 20
+        },
+        "max_pages": {
+            "title": "Max pages",
+            "type": "integer",
+            "description": "Maximum API pages to fetch.",
+            "editor": "number",
+            "minimum": 1,
+            "default": 20,
+            "prefill": 5
+        },
+        "proxyConfiguration": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Apify proxy settings.",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": false
+            }
+        }
+    },
+    "required": [],
+    "additionalProperties": false
+}

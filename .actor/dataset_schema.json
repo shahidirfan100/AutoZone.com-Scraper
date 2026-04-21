@@ -1,0 +1,129 @@
+{
+    "actorSpecification": 1,
+    "fields": {
+        "sourceMode": {
+            "title": "Source Mode",
+            "type": "string",
+            "description": "Data acquisition mode: url or keyword."
+        },
+        "sourceInput": {
+            "title": "Source Input",
+            "type": "string",
+            "description": "Original URL or keyword used for extraction."
+        },
+        "country": {
+            "title": "Country",
+            "type": "string",
+            "description": "Market country code."
+        },
+        "pageNumber": {
+            "title": "Page Number",
+            "type": "integer",
+            "description": "Result page number."
+        },
+        "rankOverall": {
+            "title": "Overall Rank",
+            "type": "integer",
+            "description": "Rank across all returned items."
+        },
+        "itemId": {
+            "title": "Item ID",
+            "type": "string",
+            "description": "AutoZone SKU identifier."
+        },
+        "itemDescription": {
+            "title": "Item Description",
+            "type": "string",
+            "description": "Product title."
+        },
+        "brandName": {
+            "title": "Brand",
+            "type": "string",
+            "description": "Product brand."
+        },
+        "partNumber": {
+            "title": "Part Number",
+            "type": "string",
+            "description": "Manufacturer part number."
+        },
+        "productDetailsPageUrl": {
+            "title": "Product URL",
+            "type": "string",
+            "description": "Relative product detail URL."
+        },
+        "productImageUrl": {
+            "title": "Image URL",
+            "type": "string",
+            "description": "Main product image URL."
+        },
+        "partGroupName": {
+            "title": "Part Group",
+            "type": "string",
+            "description": "Part family name."
+        },
+        "taxonomyPath": {
+            "title": "Taxonomy Path",
+            "type": "string",
+            "description": "Category taxonomy path."
+        },
+        "reviewStatistics": {
+            "title": "Review Statistics",
+            "type": "object",
+            "description": "Review metrics for the SKU."
+        }
+    },
+    "views": {
+        "overview": {
+            "title": "Overview",
+            "transformation": {
+                "fields": [
+                    "rankOverall",
+                    "itemDescription",
+                    "brandName",
+                    "partNumber",
+                    "itemId",
+                    "productDetailsPageUrl",
+                    "country",
+                    "sourceMode"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "rankOverall": {
+                        "label": "Rank",
+                        "format": "number"
+                    },
+                    "itemDescription": {
+                        "label": "Product",
+                        "format": "text"
+                    },
+                    "brandName": {
+                        "label": "Brand",
+                        "format": "text"
+                    },
+                    "partNumber": {
+                        "label": "Part Number",
+                        "format": "text"
+                    },
+                    "itemId": {
+                        "label": "SKU",
+                        "format": "text"
+                    },
+                    "productDetailsPageUrl": {
+                        "label": "Product URL",
+                        "format": "link"
+                    },
+                    "country": {
+                        "label": "Country",
+                        "format": "text"
+                    },
+                    "sourceMode": {
+                        "label": "Mode",
+                        "format": "text"
+                    }
+                }
+            }
+        }
+    }
+}
