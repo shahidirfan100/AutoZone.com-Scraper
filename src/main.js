@@ -16,6 +16,8 @@ const API_ENDPOINTS = {
 const MAX_PAGE_SIZE = 24;
 const MAX_REDIRECT_HOPS = 5;
 const MAX_REQUEST_RETRIES = 3;
+const DEFAULT_RESULTS_WANTED = 20;
+const DEFAULT_MAX_PAGES = 20;
 
 const COMMON_HEADERS = {
     Accept: 'application/json',
@@ -32,10 +34,11 @@ async function run() {
 
     const rawUrl = firstNonEmpty(input.url, input.startUrl, input.start_url);
 
-    const resultsWanted = toPositiveIntOrInfinity(
-        firstDefined(input.results_wanted, input.resultsWanted, input.result_wanted, input.resultWanted)
+    const resultsWanted = toPositiveInt(
+        firstDefined(input.results_wanted, input.resultsWanted, input.result_wanted, input.resultWanted),
+        DEFAULT_RESULTS_WANTED
     );
-    const maxPages = toPositiveIntOrInfinity(firstDefined(input.max_pages, input.maxPages));
+    const maxPages = toPositiveInt(firstDefined(input.max_pages, input.maxPages), DEFAULT_MAX_PAGES);
 
     const normalizedUrl = rawUrl ? normalizeAutoZoneUrl(rawUrl) : null;
     if (!normalizedUrl) {
@@ -50,7 +53,7 @@ async function run() {
     const urlContext = getUrlContext(normalizedUrl);
     const { mode } = urlContext;
 
-    log.info(`Mode: ${mode}. Country: ${market.country}. Target: ${normalizedUrl.href}`);
+    log.info(`Mode: ${mode}. Country: ${market.country}. Target: ${normalizedUrl.href}. Results wanted: ${resultsWanted}. Max pages: ${maxPages}`);
 
     const seen = new Set();
     let saved;
@@ -166,7 +169,7 @@ async function scrapeByUrl({
 
     while (pageNumber <= maxPages && totalSaved < resultsWanted) {
         const remaining = resultsWanted - totalSaved;
-        const recordsPerPage = Math.min(MAX_PAGE_SIZE, remaining);
+        const recordsPerPage = MAX_PAGE_SIZE;
 
         const response = await requestJson({
             url: API_ENDPOINTS.PRODUCT_SHELVES,
@@ -235,6 +238,7 @@ async function scrapeByUrl({
 
         totalSaved += pageSaved;
         log.info(`URL mode page ${pageNumber}: saved ${pageSaved} records`);
+        if (pageSaved === 0) break;
         if (records.length < recordsPerPage) break;
         pageNumber++;
     }
@@ -294,7 +298,7 @@ async function scrapeByKeyword({
 
     while (pageNumber <= maxPages && totalSaved < resultsWanted) {
         const remaining = resultsWanted - totalSaved;
-        const recordsPerPage = Math.min(MAX_PAGE_SIZE, remaining);
+        const recordsPerPage = MAX_PAGE_SIZE;
 
         const response = await requestJson({
             method: 'POST',
@@ -338,6 +342,7 @@ async function scrapeByKeyword({
 
         totalSaved += pageSaved;
         log.info(`Keyword mode page ${pageNumber}: saved ${pageSaved} records`);
+        if (pageSaved === 0) break;
         if (records.length < recordsPerPage) break;
         pageNumber++;
     }
@@ -798,10 +803,10 @@ function firstNonEmpty(...values) {
     return '';
 }
 
-function toPositiveIntOrInfinity(value) {
-    if (value === undefined || value === null || String(value).trim() === '') return Number.POSITIVE_INFINITY;
+function toPositiveInt(value, fallback) {
+    if (value === undefined || value === null || String(value).trim() === '') return fallback;
     const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 1) return Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
     return Math.floor(parsed);
 }
 
