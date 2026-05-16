@@ -9,7 +9,8 @@
             "type": "string",
             "description": "AutoZone page URL. If provided, URL mode is used.",
             "editor": "textfield",
-            "prefill": "https://www.autozone.com/brakes-and-traction-control/brake-pads/ford"
+            "prefill": "https://www.autozone.com/brakes-and-traction-control/brake-pads/ford",
+            "default": "https://www.autozone.com/brakes-and-traction-control/brake-pads/ford"
         },
         "results_wanted": {
             "title": "Results wanted",
@@ -26,8 +27,8 @@
             "description": "Maximum API pages to fetch.",
             "editor": "number",
             "minimum": 1,
-            "default": 20,
-            "prefill": 5
+            "default": 3,
+            "prefill": 3
         },
         "proxyConfiguration": {
             "title": "Proxy configuration",
