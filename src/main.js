@@ -7,8 +7,8 @@ const API_BASE_URL = 'https://external-api.autozone.com';
 
 const API_ENDPOINTS = {
     PAGE_TYPES: `${API_BASE_URL}/sls/b2c/product-discovery-seo-data-bs/v2/page-types`,
-    PRODUCT_SHELVES: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v1/product-shelves`,
-    PRODUCTS_SEARCH: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v1/products/search`,
+    PRODUCT_SHELVES: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v2/product-shelves`,
+    PRODUCTS_SEARCH: `${API_BASE_URL}/sls/b2c/product-discovery-browse-search-data/v2/products/search`,
     SEARCH_PRODUCT: `${API_BASE_URL}/sls/pd/product-navigation-search/v1/search-product`,
     REVIEW_STATISTICS: `${API_BASE_URL}/sls/product/product-reviews-integration-bs/v1/review-statistics`,
 };
@@ -171,28 +171,55 @@ async function scrapeByUrl({
         const remaining = resultsWanted - totalSaved;
         const recordsPerPage = MAX_PAGE_SIZE;
 
-        const response = await requestJson({
-            url: API_ENDPOINTS.PRODUCT_SHELVES,
-            proxyConfiguration,
-            searchParams: compactObject({
-                country: market.country,
-                customerType: 'B2C',
-                salesChannel: 'ECOMM',
-                partGroupId,
-                pageNumber,
-                recordsPerPage,
-                preview: false,
-                canonicalPath: resolved.result?.canonicalPath || resolved.canonicalPath,
-                makeModelYearPath: resolved.result?.makeModelYearPath,
-                botEnabledFacetPath: resolved.result?.botEnabledFacetPath,
-                storeId: queryOptions.storeId,
-                sort: queryOptions.sort,
-                facet: queryOptions.facet,
-                minPrice: queryOptions.minPrice,
-                maxPrice: queryOptions.maxPrice,
-                partNumberSearch: queryOptions.partNumberSearch,
-            }),
-        });
+        let response;
+        try {
+            response = await requestJson({
+                url: API_ENDPOINTS.PRODUCT_SHELVES,
+                proxyConfiguration,
+                searchParams: compactObject({
+                    country: market.country,
+                    customerType: 'B2C',
+                    salesChannel: 'ECOMM',
+                    partGroupId,
+                    pageNumber,
+                    recordsPerPage,
+                    preview: false,
+                    canonicalPath: resolved.result?.canonicalPath || resolved.canonicalPath,
+                    makeModelYearPath: resolved.result?.makeModelYearPath,
+                    botEnabledFacetPath: resolved.result?.botEnabledFacetPath,
+                    storeId: queryOptions.storeId,
+                    sort: queryOptions.sort,
+                    facet: queryOptions.facet,
+                    minPrice: queryOptions.minPrice,
+                    maxPrice: queryOptions.maxPrice,
+                    partNumberSearch: queryOptions.partNumberSearch,
+                }),
+            });
+        } catch (shelfErr) {
+            log.warning(`PRODUCT_SHELVES API failed (page ${pageNumber}): ${shelfErr.message}. Attempting keyword fallback.`);
+            if (pageNumber === 1) {
+                const shelfFallbackKeywords = buildFallbackKeywords({
+                    normalizedUrl,
+                    pageTypeResult: resolved.result,
+                    canonicalPath: resolved.result?.canonicalPath || fallbackCanonicalPath,
+                });
+                if (shelfFallbackKeywords.length) {
+                    return scrapeByKeywordCandidates({
+                        keywords: shelfFallbackKeywords,
+                        market,
+                        queryOptions,
+                        resultsWanted,
+                        maxPages,
+                        proxyConfiguration,
+                        seen,
+                        sourceUrl: normalizedUrl.href,
+                        sourceMode: 'url',
+                        sourceInput: normalizedUrl.href,
+                    });
+                }
+            }
+            break;
+        }
 
         const shelf = response?.productShelfResults || {};
         const records = Array.isArray(shelf.skuRecords) ? shelf.skuRecords : [];
@@ -523,7 +550,7 @@ async function requestJson({ method = 'GET', url, searchParams, jsonBody, proxyC
             lastError = error;
             if (attempt < MAX_REQUEST_RETRIES) {
                 log.warning(`Retrying request (${attempt}/${MAX_REQUEST_RETRIES}) for ${url}: ${error.message}`);
-                await Actor.sleep(500 * attempt);
+                await sleep(500 * attempt);
             }
         }
     }
@@ -826,4 +853,10 @@ function toNullableBoolean(value) {
 
 function unique(items) {
     return [...new Set(items)];
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 }

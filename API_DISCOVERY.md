@@ -1,6 +1,9 @@
 ## Selected API
-- Endpoint: `https://external-api.autozone.com/sls/b2c/product-discovery-browse-search-data/v1/product-shelves`
+- Endpoint: `https://external-api.autozone.com/sls/b2c/product-discovery-browse-search-data/v2/product-shelves`
 - Method: `GET`
+- Auth: None
+- Pagination: `pageNumber` + `recordsPerPage`
+- **Note:** Upgraded from v1 → v2 in June 2026 (v1 returns 404)
 - Auth: None
 - Pagination: `pageNumber` + `recordsPerPage`
 - Fields available: `itemId`, `itemDescription`, `productImageUrl`, `productDetailsPageUrl`, `partNumber`, `brandName`, `lineCode`, `partGroupId`, `partGroupName`, `partTerminologyId`, `taxonomyPath`, `productAttributes`, `vehicleFitment`, `warrantyType`, `badges`, `positionId`, `oemPartNumber`, `oemBrandName`, `bonusReward*`, and more.
@@ -12,9 +15,10 @@
 - Purpose: Resolve canonical path redirects and `catalogId` (`partGroupId`) before product shelf requests.
 
 ### Keyword mode endpoint
-- Endpoint: `https://external-api.autozone.com/sls/b2c/product-discovery-browse-search-data/v1/products/search`
+- Endpoint: `https://external-api.autozone.com/sls/b2c/product-discovery-browse-search-data/v2/products/search`
 - Method: `POST`
 - Purpose: API-first extraction when user provides keyword (or search URL) instead of shelf URL.
+- **Note:** Upgraded from v1 → v2 in June 2026 (v1 returns 404)
 
 ## Scoring
 | Candidate | JSON | Field richness | Auth-free | Pagination | Score |
